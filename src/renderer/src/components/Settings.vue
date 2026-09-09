@@ -45,7 +45,7 @@ const checkUpdate = async () => {
           appStore.openAppWindow({
             title: `关于`,
             hash: `about`,
-            option: { width: 520, height: 200 },
+            option: { width: 430, height: 300, resizable: false },
             query: { open: true }
           })
         "

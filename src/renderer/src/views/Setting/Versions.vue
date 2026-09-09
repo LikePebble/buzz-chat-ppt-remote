@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-
+import logo from '@renderer/assets/logo.svg'
 const versions = reactive({ ...window.electron.process.versions })
 const appVersion = ref('')
 onMounted(async () => {
@@ -9,38 +9,39 @@ onMounted(async () => {
 </script>
 
 <template>
-  <ul class="versions">
-    <li class="electron-version">Core v{{ appVersion }}</li>
-    <li class="electron-version">Electron v{{ versions.electron }}</li>
-    <li class="chrome-version">Chromium v{{ versions.chrome }}</li>
-    <li class="node-version">Node v{{ versions.node }}</li>
-  </ul>
+  <a-row justify="center" style="margin-top: 10px">
+    <a-col :span="6">
+      <img :src="logo" style="width: 86px" />
+    </a-col>
+    <a-col :span="16">
+      <span>本地助手{{ appVersion }}</span>
+      <ul class="versions">
+        <li>Electron v{{ versions.electron }}</li>
+        <li>Chromium v{{ versions.chrome }}</li>
+        <li>Node v{{ versions.node }}</li>
+        <li>Copyright ©2025 smilexizheng.</li>
+      </ul>
+    </a-col>
+  </a-row>
 </template>
 
 <style scoped>
-.versions {
-  margin: 0 auto;
-  padding: 15px 0;
+* {
   font-family: 'Menlo', 'Lucida Console', monospace;
-  display: inline-flex;
+}
+.versions {
+  padding: 15px 0;
+
+  display: grid;
   overflow: hidden;
   align-items: center;
   border-radius: 22px;
-  background-color: var(--color-fill-2);
   backdrop-filter: blur(24px);
 }
 
 .versions li {
-  display: block;
-  float: left;
-  border-right: 1px solid var(--color-border-2);
-  padding: 0 20px;
-  font-size: 14px;
-  line-height: 14px;
+  font-size: 12px;
+  line-height: 18px;
   opacity: 0.8;
-
-  & :last-child {
-    border: none;
-  }
 }
 </style>
