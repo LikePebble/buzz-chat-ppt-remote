@@ -52,13 +52,13 @@ onMounted(() => {
   background: var(--color-neutral-2);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   padding: 0 10px;
 }
 
 .min-logo {
-  height: 20px;
-  width: 20px;
+  height: 16px;
+  width: 16px;
 }
 
 .window-controls {
