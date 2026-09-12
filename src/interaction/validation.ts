@@ -58,3 +58,10 @@ export class RateLimit {
     this.timestamps.push(now)
   }
 }
+
+export function nickname(value: unknown): string {
+  const name = string(value, 1, 100).trim().normalize('NFC')
+  if (!name || Array.from(name).length > 10 || /[\p{Cc}\p{Cf}]/u.test(name))
+    fail('INVALID_PAYLOAD', '닉네임은 앞뒤 공백을 제외하고 1~10자로 입력하세요.')
+  return name
+}

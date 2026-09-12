@@ -7,7 +7,8 @@ import type {
   Participant,
   RoomState
 } from './protocol'
-import { fail, RateLimit, secretMatches } from './validation'
+import { fail, nickname, RateLimit, secretMatches } from './validation'
+import { generateNickname } from './nicknames'
 
 interface Member {
   public: Participant
@@ -17,12 +18,21 @@ interface Member {
   reactionLimit: RateLimit
 }
 export class Room {
+  controllerId: string | null = null
   readonly createdAt = Date.now()
   readonly hostToken = randomBytes(32).toString('hex')
   readonly members = new Map<string, Member>()
   readonly chatHistory: ChatMessage[] = []
   readonly settings = { autoAdvanceOnWinner: false }
-  buzz: BuzzState = { enabled: true, round: 1, winner: null, ranking: [], acceptedCount: 0 }
+  buzz: BuzzState = {
+    displayRound: 1,
+    mode: 'all',
+    enabled: true,
+    round: 1,
+    winner: null,
+    ranking: [],
+    acceptedCount: 0
+  }
   private buzzed = new Set<string>()
   constructor(
     readonly id: string,
@@ -35,15 +45,17 @@ export class Room {
       if (!secretMatches(payload.resumeToken, member.resumeToken))
         fail('UNAUTHORIZED', '참가자 재접속 키가 올바르지 않습니다.')
     } else {
-      // IDs and nicknames are server-issued; never adopt a caller's claimed identity.
+      // Identity and resume credentials remain server-issued.
       if (this.members.size >= 5000)
         fail('ROOM_FULL', '참가 한도에 도달했습니다. 호스트 앱을 다시 시작하세요.')
       const id = randomUUID()
-      const animals = ['펭귄', '고양이', '수달', '여우', '라쿤', '판다']
       member = {
         public: {
           id,
-          nickname: `익명의 ${animals[randomInt(animals.length)]} ${String(this.members.size + 1).padStart(2, '0')}`,
+          nickname:
+            payload.nickname === undefined
+              ? generateNickname(new Set([...this.members.values()].map((m) => m.public.nickname)))
+              : nickname(payload.nickname),
           joinedAt: Date.now(),
           lastSeenAt: Date.now()
         },
@@ -72,6 +84,7 @@ export class Room {
   }
   state(): RoomState {
     return {
+      controllerId: this.controllerId,
       id: this.id,
       createdAt: this.createdAt,
       participants: this.participants(),
@@ -80,6 +93,14 @@ export class Room {
       settings: this.settings
     }
   }
+  rename(id: string, value: unknown): string {
+    const member = this.members.get(id)
+    if (!member) fail('UNAUTHORIZED', '먼저 방에 참가해 주세요.')
+    const name = nickname(value)
+    member.public.nickname = name
+    for (const entry of this.buzz.ranking) if (entry.participantId === id) entry.nickname = name
+    return name
+  }
   hasBuzzed(id: string): boolean {
     return this.buzzed.has(id)
   }
@@ -87,6 +108,8 @@ export class Room {
     if (round !== this.buzz.round) fail('STALE_ROUND', '라운드가 바뀌었습니다. 다시 눌러 주세요.')
     if (!this.buzz.enabled) fail('BUZZ_DISABLED', '버저가 잠겨 있습니다.')
     if (this.buzzed.has(id)) fail('ALREADY_BUZZED', '이 라운드에는 이미 참여했습니다.')
+    if (this.buzz.mode === 'first' && this.buzz.winner)
+      fail('BUZZ_DISABLED', '선착순 버징이 마감되었습니다.')
     const member = this.members.get(id)
     if (!member) fail('UNAUTHORIZED', '먼저 방에 참가해 주세요.')
     const received = this.clock()
@@ -102,12 +125,14 @@ export class Room {
     this.buzzed.add(id)
     this.buzz.acceptedCount++
     if (isWinner) this.buzz.winner = entry
-    if (this.buzz.ranking.length < 10) this.buzz.ranking.push(entry)
+    this.buzz.ranking.push(entry)
     return isWinner
   }
-  reset(): BuzzState {
+  reset(complete = false): BuzzState {
     this.buzz = {
-      enabled: this.buzz.enabled,
+      displayRound: complete ? 1 : this.buzz.displayRound + 1,
+      mode: this.buzz.mode,
+      enabled: complete ? true : this.buzz.enabled,
       round: this.buzz.round + 1,
       winner: null,
       ranking: [],

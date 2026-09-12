@@ -1,5 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, systemPreferences } from 'electron'
 import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { InternetAccess } from './internet'
 import { createInteractionServer } from './server'
 import { MacOSPowerPointController, MockPowerPointController } from './powerpoint'
 import type { HostBootstrap } from './protocol'
@@ -8,6 +10,7 @@ let win: BrowserWindow | null = null
 let server: ReturnType<typeof createInteractionServer> | undefined
 let hostUrl = ''
 let bootstrap: HostBootstrap
+let internet: InternetAccess | undefined
 const trusted = () =>
   process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false)
 const controller =
@@ -24,11 +27,17 @@ else {
   app
     .whenReady()
     .then(async () => {
-      console.info('[app] Buzz Chat PPT Remote', app.getVersion(), process.arch)
+      app.dock?.setIcon(
+        app.isPackaged
+          ? join(process.resourcesPath, 'buzz-icon.png')
+          : join(app.getAppPath(), 'build/buzz-icon.png')
+      )
+      console.info('[app] Buzzing', app.getVersion(), process.arch)
       server = createInteractionServer({
         controller,
         webRoot: join(__dirname, '../renderer'),
         devUrl: process.env.ELECTRON_RENDERER_URL,
+        devRoot: app.isPackaged ? undefined : app.getAppPath(),
         sourceArchive: app.isPackaged
           ? join(process.resourcesPath, 'source.tar.gz')
           : join(app.getAppPath(), 'out/source.tar.gz')
@@ -47,6 +56,18 @@ else {
         serverUrl: `http://127.0.0.1:${port}`,
         system: server.system
       }
+      const internetDirectory = join(app.getPath('userData'), 'internet')
+      await mkdir(internetDirectory, { recursive: true })
+      const config = join(internetDirectory, 'config.yml')
+      await writeFile(config, '{}\n')
+      internet = new InternetAccess(
+        app.isPackaged
+          ? join(process.resourcesPath, 'cloudflared')
+          : join(app.getAppPath(), 'build/vendor/cloudflared'),
+        bootstrap.serverUrl,
+        config,
+        (status) => server?.setInternetStatus(status)
+      )
       function checkSender(event: Electron.IpcMainInvokeEvent): void {
         if (
           !win ||
@@ -58,7 +79,12 @@ else {
       }
       ipcMain.handle('interaction:bootstrap', (event) => {
         checkSender(event)
-        return bootstrap
+        return { ...bootstrap, system: server!.system }
+      })
+      ipcMain.handle('interaction:internet', (event, enabled: unknown) => {
+        checkSender(event)
+        if (typeof enabled !== 'boolean') throw new Error('INVALID_PAYLOAD')
+        return enabled ? internet!.start() : internet!.stop()
       })
       ipcMain.handle('interaction:accessibility', (event) => {
         checkSender(event)
@@ -76,6 +102,9 @@ else {
         clipboard.writeText(text)
       })
       await createWindow()
+      if (process.platform === 'darwin' && process.env.BUZZ_MOCK_PPT !== '1' && !trusted()) {
+        systemPreferences.isTrustedAccessibilityClient(true)
+      }
     })
     .catch((error) => {
       console.error('[app] startup failed', error)
@@ -88,12 +117,13 @@ else {
   })
   app.on('window-all-closed', () => app.quit())
   app.on('before-quit', () => {
+    internet?.stop()
     void server?.close()
   })
 }
 async function createWindow(): Promise<void> {
   win = new BrowserWindow({
-    title: 'Buzz Chat PPT Remote',
+    title: 'Buzzing',
     width: 1180,
     height: 900,
     minWidth: 760,
@@ -109,7 +139,7 @@ async function createWindow(): Promise<void> {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (
       url === 'https://github.com/smilexizheng/mobile-pc-control-server' ||
-      bootstrap.system.participantUrls.includes(url)
+      server?.system.participantUrls.includes(url)
     )
       void shell.openExternal(url)
     return { action: 'deny' }

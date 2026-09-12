@@ -1,5 +1,5 @@
 appId: io.github.likepebble.buzz-chat-ppt-remote
-productName: Buzz Chat PPT Remote
+productName: Buzzing
 directories:
   buildResources: build
 files:
@@ -9,20 +9,31 @@ files:
   - LICENSE_NOTES.md
   - THIRD_PARTY_NOTICES.txt
 extraResources:
+  - from: src/renderer/interaction/fonts/OFL.txt
+    to: Pretendard-OFL.txt
+  - from: build/buzz-icon.png
+    to: buzz-icon.png
+  - from: build/vendor/cloudflared
+    to: cloudflared
+  - from: docs/CLOUDFLARED_LICENSE.txt
+    to: CLOUDFLARED_LICENSE.txt
   - from: out/source.tar.gz
     to: source.tar.gz
 mac:
+  icon: build/buzz-icon.icns
   identity: '-'
   entitlements: build/entitlements.buzz.plist
   entitlementsInherit: build/entitlements.buzz.plist
   category: public.app-category.productivity
   minimumSystemVersion: '12.0'
   notarize: false
+  binaries:
+    - Contents/Resources/cloudflared
   extendInfo:
     NSAppleEventsUsageDescription: Control PowerPoint presentations using fixed keyboard commands.
     NSLocalNetworkUsageDescription: Allow audience phones on the same Wi-Fi to join your presentation room.
   target:
     - target: zip
       arch: [arm64]
-  artifactName: Buzz-Chat-PPT-Remote-${version}-${arch}.${ext}
+  artifactName: Buzzing-${version}-${arch}.${ext}
 npmRebuild: false

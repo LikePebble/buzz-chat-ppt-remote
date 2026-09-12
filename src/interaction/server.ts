@@ -13,15 +13,19 @@ import type {
   SystemStatus,
   PowerPointCommand,
   PowerPointStatus,
-  JoinPayload
+  JoinPayload,
+  InternetStatus
 } from './protocol'
 import type { PowerPointController } from './powerpoint'
 import { Room, roomId } from './room'
+import { allowedDevPath } from './dev-paths'
+import { createSourceArchive } from './source'
 import {
   boolean,
   fail,
   InteractionError,
   object,
+  nickname,
   publicError,
   RateLimit,
   secretMatches,
@@ -48,6 +52,7 @@ export interface ServerOptions {
   controller: PowerPointController
   webRoot?: string
   devUrl?: string
+  devRoot?: string
   sourceArchive?: string
   logger?: (event: string, detail?: string) => void
 }
@@ -73,18 +78,28 @@ export function createInteractionServer(options: ServerOptions) {
     res.setHeader('Cache-Control', 'no-store')
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
     )
     next()
   })
   web.get('/health', (_req, res) => res.json({ ready: true, roomId: activeRoom.id }))
-  web.get('/source', (_req, res) => {
+  let sourceBuild: Promise<void> | undefined
+  web.get('/source', async (_req, res) => {
+    if (options.devUrl && options.devRoot && options.sourceArchive) {
+      try {
+        sourceBuild ??= createSourceArchive(options.devRoot, options.sourceArchive)
+        await sourceBuild
+      } catch {
+        res.status(503).send('현재 소스 아카이브 생성 실패. 호스트에서 빌드를 확인하세요.')
+        return
+      } finally {
+        sourceBuild = undefined
+      }
+    }
     if (options.sourceArchive && existsSync(options.sourceArchive))
       res.download(options.sourceArchive, 'buzz-chat-ppt-remote-source.tar.gz')
     else
-      res.redirect(
-        'https://github.com/LikePebble/buzz-chat-ppt-remote/tree/feature/buzz-chat-ppt-remote-macos'
-      )
+      res.status(503).send('현재 버전 소스 아카이브가 없습니다. 호스트에서 앱을 다시 빌드하세요.')
   })
   // Legacy endpoints are absent even during dev proxying.
   web.use(['/win-control.io', '/downloadFile', '/getInfo', '/mobile.html'], (_req, res) => {
@@ -96,6 +111,14 @@ export function createInteractionServer(options: ServerOptions) {
         /^\/(r|host)\/[A-Z2-9]{6}$/.test(req.path) || req.path === '/'
           ? '/interaction.html'
           : req.url
+      if (
+        !['GET', 'HEAD'].includes(req.method) ||
+        !options.devRoot ||
+        !allowedDevPath(path, options.devRoot)
+      ) {
+        res.status(404).end()
+        return
+      }
       const target = new URL(options.devUrl!)
       target.pathname = path.split('?')[0]
       target.search = path.includes('?') ? path.slice(path.indexOf('?')) : ''
@@ -105,8 +128,11 @@ export function createInteractionServer(options: ServerOptions) {
         incoming.pipe(res)
       })
       upstream.on('error', () => {
-        res.status(502).send('개발 서버 연결 실패')
+        if (!res.headersSent) res.status(502).send('개발 서버 연결 실패')
+        else res.destroy()
       })
+      upstream.setTimeout(10000, () => upstream.destroy(new Error('Dev proxy timeout')))
+      res.on('close', () => upstream.destroy())
       upstream.end()
     })
   } else if (options.webRoot) {
@@ -130,11 +156,20 @@ export function createInteractionServer(options: ServerOptions) {
     platform: process.platform
   }
   const hostChannel = (room: Room) => `host:${room.id}`
-  const emitPpt = (room: Room, status: PowerPointStatus) =>
-    nsp.to(hostChannel(room)).emit('ppt:status', status)
+  const participantChannel = (id: string) => `participant:${id}`
+  const emitPpt = (room: Room, status: PowerPointStatus) => {
+    const recipients = room.controllerId
+      ? nsp.to(hostChannel(room)).to(participantChannel(room.controllerId))
+      : nsp.to(hostChannel(room))
+    recipients.emit('ppt:status', status)
+  }
   let pptBusy = false
   async function runPpt(room: Room, command: PowerPointCommand): Promise<PowerPointStatus> {
-    if (pptBusy) fail('RATE_LIMITED', 'PowerPoint 명령 실행 중입니다.')
+    if (pptBusy) {
+      const message = 'PowerPoint 명령 실행 중입니다. 요청한 명령은 실행되지 않았습니다.'
+      nsp.to(hostChannel(room)).emit('app:error', { code: 'RATE_LIMITED', message })
+      fail('RATE_LIMITED', message)
+    }
     pptBusy = true
     log('ppt command', command)
     try {
@@ -188,6 +223,16 @@ export function createInteractionServer(options: ServerOptions) {
       if (host) hostLimit.accept()
       return socket.data.room
     }
+    const pptRoom = (): Room => {
+      const room = roomFor()
+      if (
+        !socket.data.host &&
+        (!socket.data.participantId || room.controllerId !== socket.data.participantId)
+      )
+        fail('UNAUTHORIZED', 'PowerPoint 제어권이 필요합니다.')
+      hostLimit.accept()
+      return room
+    }
     const participantFor = (): { room: Room; id: string } => {
       const room = roomFor()
       if (!socket.data.participantId) fail('UNAUTHORIZED', '참가자만 사용할 수 있습니다.')
@@ -224,12 +269,13 @@ export function createInteractionServer(options: ServerOptions) {
       const room = findRoom(p.roomId)
       if (p.participantId !== undefined && !/^[a-f0-9-]{36}$/.test(string(p.participantId, 36, 36)))
         fail('INVALID_PAYLOAD', '참가자 ID가 올바르지 않습니다.')
-      if (p.nickname !== undefined) string(p.nickname, 1, 40)
+      if (p.nickname !== undefined) nickname(p.nickname)
       if (p.resumeToken !== undefined && !/^[a-f0-9]{64}$/.test(string(p.resumeToken, 64, 64)))
         fail('INVALID_PAYLOAD', '재접속 키가 올바르지 않습니다.')
       const identity = room.join(p as unknown as JoinPayload, socket.id)
       socket.data = { room, participantId: identity.participantId, host: false }
       socket.join(room.id)
+      socket.join(participantChannel(identity.participantId))
       clearTimeout(joinedTimer)
       nsp.to(room.id).emit('presence:update', room.participants())
       log(
@@ -257,6 +303,26 @@ export function createInteractionServer(options: ServerOptions) {
         .then((status) => socket.emit('ppt:status', status))
         .catch((error) => socket.emit('app:error', publicError(error)))
       return { state: room.state() }
+    })
+    handle('participant:rename', (payload) => {
+      const { room, id } = participantFor()
+      const name = room.rename(id, object(payload, ['nickname']).nickname)
+      nsp.to(room.id).emit('presence:update', room.participants())
+      nsp.to(room.id).emit('buzz:state', room.buzz)
+      return { nickname: name }
+    })
+    handle('ppt:assign', (payload) => {
+      const room = roomFor(true)
+      const id = object(payload, ['participantId']).participantId
+      if (id !== null && (typeof id !== 'string' || !room.participants().some((p) => p.id === id)))
+        fail('INVALID_PAYLOAD', '연결된 참가자를 선택하세요.')
+      room.controllerId = id as string | null
+      nsp.to(room.id).emit('ppt:controller', room.controllerId)
+      void options.controller
+        .getStatus()
+        .then((status) => emitPpt(room, status))
+        .catch(() => {})
+      return { participantId: room.controllerId }
     })
     handle('buzz:press', (payload) => {
       const p = object(payload, ['roundId'])
@@ -286,6 +352,22 @@ export function createInteractionServer(options: ServerOptions) {
       log('buzz reset', room.id)
       return room.buzz
     })
+    handle('buzz:restart', (payload) => {
+      const room = roomFor(true)
+      object(payload, [])
+      room.reset(true)
+      nsp.to(room.id).emit('buzz:state', room.buzz)
+      return room.buzz
+    })
+    handle('buzz:set-mode', (payload) => {
+      const room = roomFor(true)
+      const mode = object(payload, ['mode']).mode
+      if (mode !== 'first' && mode !== 'all')
+        fail('INVALID_PAYLOAD', '버저 모드가 올바르지 않습니다.')
+      room.buzz.mode = mode
+      nsp.to(room.id).emit('buzz:state', room.buzz)
+      return room.buzz
+    })
     handle('buzz:set-enabled', (payload) => {
       const room = roomFor(true)
       room.buzz.enabled = boolean(object(payload, ['enabled']).enabled)
@@ -297,7 +379,7 @@ export function createInteractionServer(options: ServerOptions) {
       room.settings.autoAdvanceOnWinner = boolean(
         object(payload, ['autoAdvanceOnWinner']).autoAdvanceOnWinner
       )
-      nsp.to(room.id).emit('room:state', room.state())
+      nsp.to(hostChannel(room)).emit('room:settings', { ...room.settings })
       return room.settings
     })
     handle('chat:send', (payload) => {
@@ -318,14 +400,14 @@ export function createInteractionServer(options: ServerOptions) {
       return undefined
     })
     handle('ppt:command', async (payload) => {
-      const room = roomFor(true)
+      const room = pptRoom()
       const command = object(payload, ['command']).command
       if (!PPT_COMMANDS.includes(command as PowerPointCommand))
         fail('INVALID_PAYLOAD', '지원하지 않는 PowerPoint 명령입니다.')
       return runPpt(room, command as PowerPointCommand)
     })
     handle('ppt:refresh', async (payload) => {
-      const room = roomFor(true)
+      const room = pptRoom()
       object(payload, [])
       const status = await options.controller.getStatus()
       emitPpt(room, status)
@@ -336,6 +418,13 @@ export function createInteractionServer(options: ServerOptions) {
       const { room, participantId } = socket.data
       if (room && participantId) {
         room.leave(participantId, socket.id)
+        if (
+          room.controllerId === participantId &&
+          !room.participants().some((p) => p.id === participantId)
+        ) {
+          room.controllerId = null
+          nsp.to(room.id).emit('ppt:controller', null)
+        }
         nsp.to(room.id).emit('presence:update', room.participants())
         log('participant leave', room.id)
       }
@@ -352,6 +441,15 @@ export function createInteractionServer(options: ServerOptions) {
     get system() {
       return system
     },
+    setInternetStatus(status: InternetStatus): void {
+      const participantUrls = system.addresses
+        .slice(0, 1)
+        .map((ip) => `http://${ip}:${system.port}/r/${activeRoom.id}`)
+      if (status.state === 'ready' && status.url)
+        participantUrls.splice(0, participantUrls.length, `${status.url}/r/${activeRoom.id}`)
+      system = { ...system, internet: status, participantUrls }
+      for (const room of rooms.values()) nsp.to(hostChannel(room)).emit('system:status', system)
+    },
     async listen(port = 3210, host = '0.0.0.0'): Promise<number> {
       await new Promise<void>((resolve, reject) => {
         const error = (err: Error) => reject(err)
@@ -367,7 +465,9 @@ export function createInteractionServer(options: ServerOptions) {
       system = {
         port: address.port,
         addresses,
-        participantUrls: addresses.map((ip) => `http://${ip}:${address.port}/r/${activeRoom.id}`),
+        participantUrls: addresses
+          .slice(0, 1)
+          .map((ip) => `http://${ip}:${address.port}/r/${activeRoom.id}`),
         platform: process.platform
       }
       log('server ready', `0.0.0.0:${address.port}; LAN ${addresses.join(', ') || 'unavailable'}`)

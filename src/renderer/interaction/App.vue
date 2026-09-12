@@ -27,9 +27,43 @@ const connected = ref(false)
 const joining = ref(true)
 const error = ref('')
 const notice = ref('')
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+watch(notice, (value) => {
+  if (noticeTimer) {
+    clearTimeout(noticeTimer)
+    timers.delete(noticeTimer)
+  }
+  if (!value) return
+  noticeTimer = setTimeout(() => {
+    if (noticeTimer) timers.delete(noticeTimer)
+    notice.value = ''
+  }, 4000)
+  timers.add(noticeTimer)
+})
+watch(error, (value) => {
+  if (value) notice.value = ''
+})
 const hasBuzzed = ref(false)
 const pressing = ref(false)
 const chat = ref('')
+const nicknameDraft = ref('')
+const nicknameSaving = ref(false)
+const nicknameLength = computed(
+  () => Array.from(nicknameDraft.value.trim().normalize('NFC')).length
+)
+const nicknameProblem = computed(() =>
+  !nicknameLength.value
+    ? '닉네임을 입력해 주세요.'
+    : nicknameLength.value > 10
+      ? '닉네임은 공백을 포함해 최대 10자입니다.'
+      : /[\p{Cc}\p{Cf}]/u.test(nicknameDraft.value)
+        ? '보이지 않는 문자와 줄바꿈은 사용할 수 없습니다.'
+        : ''
+)
+const nicknameDetails = ref<HTMLDetailsElement | null>(null)
+const canControlPpt = computed(
+  () => isHost || (!!identity.value && state.value?.controllerId === identity.value.participantId)
+)
 const sending = ref(false)
 const pptBusy = ref(false)
 const ppt = ref<PowerPointStatus | null>(null)
@@ -66,9 +100,11 @@ const buzzLabel = computed(() =>
         ? '🏆 내가 1등!'
         : hasBuzzed.value
           ? '참여 완료 · 잠김'
-          : pressing.value
-            ? '전송 중…'
-            : 'BUZZ'
+          : firstClosed.value
+            ? '선착순 마감'
+            : pressing.value
+              ? '전송 중…'
+              : 'BUZZ'
 )
 const buzzHint = computed(() =>
   !connected.value
@@ -78,11 +114,19 @@ const buzzHint = computed(() =>
       : hasBuzzed.value
         ? '다음 라운드를 기다려 주세요'
         : state.value?.buzz.winner
-          ? '아직 순위에 참여할 수 있어요'
+          ? firstClosed.value
+            ? '다음 라운드를 기다려 주세요'
+            : '아직 순위에 참여할 수 있어요'
           : '정답을 알면 바로 누르세요'
 )
+const firstClosed = computed(() => state.value?.buzz.mode === 'first' && !!state.value.buzz.winner)
 const canBuzz = computed(
-  () => connected.value && state.value?.buzz.enabled && !hasBuzzed.value && !pressing.value
+  () =>
+    connected.value &&
+    state.value?.buzz.enabled &&
+    !hasBuzzed.value &&
+    !pressing.value &&
+    !firstClosed.value
 )
 const connectionText = computed(() =>
   connected.value ? '연결됨' : joining.value ? '연결 중…' : '연결 끊김 · 자동 재접속 중'
@@ -112,6 +156,7 @@ async function command<K extends keyof ClientPayloads>(
   event: K,
   payload: ClientPayloads[K]
 ): Promise<ClientResults[K] | null> {
+  notice.value = ''
   if (!socket?.connected) {
     error.value = '서버에 연결되지 않았습니다.'
     return null
@@ -158,6 +203,7 @@ async function joinRoom(): Promise<void> {
     })
     if (result) {
       identity.value = result.identity
+      nicknameDraft.value = result.identity.nickname
       state.value = result.state
       hasBuzzed.value = result.hasBuzzed
       saveStorage(storageKey, JSON.stringify(result.identity))
@@ -215,13 +261,25 @@ onMounted(async () => {
   socket.on('connect_error', () => {
     connected.value = false
     joining.value = false
-    error.value = '서버 연결 실패. 같은 Wi-Fi와 호스트 앱을 확인하세요.'
+    error.value = '서버 연결 실패. 인터넷 연결과 호스트 앱을 확인하세요.'
   })
   socket.on('room:state', (next) => {
     state.value = next
   })
+  socket.on('room:settings', (settings) => {
+    if (state.value) state.value.settings = settings
+  })
   socket.on('presence:update', (participants) => {
     if (state.value) state.value.participants = participants
+    const me = participants.find((p) => p.id === identity.value?.participantId)
+    if (me && identity.value) {
+      identity.value.nickname = me.nickname
+      saveStorage(storageKey, JSON.stringify(identity.value))
+    }
+  })
+  socket.on('ppt:controller', (id) => {
+    if (state.value) state.value.controllerId = id
+    if (!isHost && id !== identity.value?.participantId) ppt.value = null
   })
   socket.on('buzz:state', (buzz) => {
     if (!state.value) return
@@ -259,9 +317,15 @@ onMounted(async () => {
   socket.connect()
 })
 watch(
+  () => system.value?.internet?.url,
+  (url) => {
+    if (url) selectedUrl.value = `${url}/r/${roomId}`
+  }
+)
+watch(
   () => system.value?.participantUrls,
   (urls) => {
-    if (urls?.length && !urls.includes(selectedUrl.value)) selectedUrl.value = urls[0]
+    if (!urls?.includes(selectedUrl.value)) selectedUrl.value = urls?.[0] ?? ''
   },
   { immediate: true }
 )
@@ -283,7 +347,7 @@ watch([selectedUrl, qrElement], async () => {
   qr.append(qrElement.value)
 })
 watch(
-  () => state.value?.chatHistory.length,
+  () => state.value?.chatHistory.at(-1)?.id,
   async () => {
     await nextTick()
     chatElement.value?.scrollTo({ top: chatElement.value.scrollHeight })
@@ -305,6 +369,25 @@ async function buzz(): Promise<void> {
   }
   pressing.value = false
 }
+async function rename(): Promise<void> {
+  if (nicknameSaving.value || nicknameProblem.value) return
+  nicknameSaving.value = true
+  const result = await command('participant:rename', { nickname: nicknameDraft.value })
+  if (result && identity.value) {
+    identity.value.nickname = result.nickname
+    nicknameDraft.value = result.nickname
+    saveStorage(storageKey, JSON.stringify(identity.value))
+    notice.value = '닉네임을 변경했습니다.'
+    if (nicknameDetails.value) {
+      nicknameDetails.value.open = false
+      nicknameDetails.value.querySelector('summary')?.focus()
+    }
+  }
+  nicknameSaving.value = false
+}
+function pressBuzz(event: PointerEvent): void {
+  if (event.isPrimary && event.button === 0) void buzz()
+}
 async function sendChat(): Promise<void> {
   if (!chat.value.trim() || sending.value) return
   sending.value = true
@@ -322,6 +405,7 @@ async function pptCommand(action: PowerPointCommand): Promise<void> {
   pptBusy.value = false
 }
 async function copyLink(host = false): Promise<void> {
+  if (host && !selectedUrl.value) return
   const text = host
     ? selectedUrl.value.replace('/r/', '/host/') + '#token=' + token
     : selectedUrl.value
@@ -349,14 +433,37 @@ async function permission(): Promise<void> {
   await window.buzzHost?.requestAccessibility()
   await command('ppt:refresh', {})
 }
+async function toggleInternet(): Promise<void> {
+  if (!desktop) return
+  const active = ['ready', 'connecting'].includes(system.value?.internet?.state ?? 'off')
+  try {
+    const result = await desktop.setInternetEnabled(!active)
+    if (result.state === 'error') error.value = result.message ?? '인터넷 참여 연결 실패'
+  } catch {
+    error.value = '인터넷 참여 설정을 변경하지 못했습니다. 다시 시도하세요.'
+  }
+}
 </script>
 
 <template>
   <div class="app-shell" :class="{ 'host-shell': isHost }">
     <header class="masthead">
-      <div>
-        <span class="eyebrow">LIVE / {{ isHost ? 'HOST DESK' : 'AUDIENCE' }}</span>
-        <h1>{{ isHost ? 'Buzz Chat PPT Remote' : (identity?.nickname ?? '함께 참여해요') }}</h1>
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <path d="M8 13a8 8 0 0 1 16 0" />
+            <path d="M5 13a11 11 0 0 1 22 0" />
+            <path d="M7 22h18M10 19a6 6 0 0 1 12 0v3H10z" />
+          </svg>
+        </span>
+        <div>
+          <h1>
+            Buzzing<span class="brand-role">{{ isHost ? 'HOST' : 'LIVE' }}</span>
+          </h1>
+          <p class="brand-subtitle">
+            {{ isHost ? '모두의 반응이 모이는 순간' : '함께 누르고, 이야기해요' }}
+          </p>
+        </div>
       </div>
       <div class="connection" :class="{ online: connected }">
         <span aria-hidden="true">●</span> {{ connectionText
@@ -370,6 +477,40 @@ async function permission(): Promise<void> {
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="!state && !error" class="empty">방에 연결하고 있습니다…</p>
     <div v-if="state" :class="isHost ? 'host-grid' : 'participant-stack'">
+      <section v-if="!isHost" class="panel nickname-panel">
+        <details ref="nicknameDetails">
+          <summary class="nickname-summary">
+            <span
+              ><small>내 닉네임</small><strong>{{ identity?.nickname }}</strong></span
+            ><span class="edit-label">변경</span>
+          </summary>
+          <form class="chat-form" @submit.prevent="rename">
+            <label class="sr-only" for="nickname">닉네임 (최대 10자)</label>
+            <input
+              id="nickname"
+              v-model="nicknameDraft"
+              placeholder="닉네임 (최대 10자)"
+              :disabled="!connected"
+              :aria-invalid="!!nicknameProblem"
+              aria-describedby="nickname-help"
+            />
+            <button class="primary" :disabled="!connected || nicknameSaving || !!nicknameProblem">
+              {{ nicknameSaving ? '저장 중' : '저장' }}
+            </button>
+          </form>
+          <p
+            id="nickname-help"
+            class="field-help"
+            :class="{ 'field-error': nicknameProblem }"
+            aria-live="polite"
+          >
+            {{
+              nicknameProblem ||
+              `자동으로 만든 이름도 자유롭게 바꿀 수 있어요. ${nicknameLength}/10자`
+            }}
+          </p>
+        </details>
+      </section>
       <section v-if="isHost" class="panel join-panel">
         <div class="section-heading">
           <h2>참가자 초대</h2>
@@ -377,16 +518,35 @@ async function permission(): Promise<void> {
         </div>
         <div v-if="selectedUrl" ref="qrElement" class="qr" aria-label="참가자 입장 QR 코드"></div>
         <p v-else class="alert">
-          LAN 주소를 찾을 수 없습니다. Wi-Fi에 연결하고 앱을 다시 시작하세요.
+          참여 주소가 없습니다. 인터넷 참여를 켜거나 Wi-Fi 연결을 확인하세요.
         </p>
-        <p class="muted">같은 Wi-Fi에서 카메라로 스캔하세요.</p>
-        <label v-if="system && system.participantUrls.length > 1" class="field-label"
-          >LAN 주소<select v-model="selectedUrl">
-            <option v-for="url in system.participantUrls" :key="url" :value="url">
-              {{ url.split('/')[2] }}
-            </option>
-          </select></label
-        >
+        <p class="muted">
+          {{
+            selectedUrl.startsWith('https://')
+              ? '다른 Wi-Fi나 모바일 데이터에서도 참여할 수 있어요.'
+              : '같은 Wi-Fi에서 카메라로 스캔하세요.'
+          }}
+        </p>
+        <div v-if="desktop" class="button-row">
+          <button class="primary" :disabled="!connected" @click="toggleInternet">
+            {{
+              system?.internet?.state === 'connecting'
+                ? '인터넷 연결 취소'
+                : system?.internet?.state === 'ready'
+                  ? '인터넷 참여 끄기'
+                  : '인터넷 참여 켜기'
+            }}
+          </button>
+        </div>
+        <p v-if="system?.internet?.state === 'connecting'" class="muted" role="status">
+          외부 참여 링크를 만들고 있습니다…
+        </p>
+        <p v-if="system?.internet?.state === 'ready'" class="muted">
+          앱과 인터넷 참여를 켜 둔 동안 사용할 수 있는 임시 링크입니다.
+        </p>
+        <p v-if="system?.internet?.state === 'error'" class="alert" role="alert">
+          {{ system.internet.message }}
+        </p>
         <a
           v-if="selectedUrl"
           class="join-link"
@@ -401,40 +561,83 @@ async function permission(): Promise<void> {
             호스트 링크 복사
           </button>
         </div>
-        <small class="muted">호스트 링크는 PowerPoint 제어 권한을 포함합니다.</small>
+        <small class="muted"
+          >호스트 링크에는 PowerPoint 제어 권한이 포함됩니다. 인터넷 참여를 켜면 원격에서도 사용할
+          수 있습니다.</small
+        >
       </section>
       <section class="panel buzz-panel" :class="{ winner: isWinner }">
         <div class="section-heading">
           <h2>{{ isHost ? '버저 진행' : '누가 가장 빠를까요?' }}</h2>
-          <span class="tag">ROUND {{ state.buzz.round }}</span>
+          <span class="tag">ROUND {{ state.buzz.displayRound ?? state.buzz.round }}</span>
         </div>
         <template v-if="!isHost"
           ><button
             class="buzz-button"
             :class="{ won: isWinner, pressed: hasBuzzed }"
             :disabled="!canBuzz"
-            @click="buzz"
+            @pointerdown="pressBuzz"
+            @click="$event.detail === 0 && buzz()"
           >
             <span>{{ buzzLabel }}</span
             ><small>{{ buzzHint }}</small>
           </button></template
         >
         <div v-else class="host-winner">
-          <span class="eyebrow">{{ state.buzz.enabled ? 'BUZZER OPEN' : 'BUZZER DISABLED' }}</span
-          ><strong>{{ state.buzz.winner?.nickname ?? '첫 버저를 기다리는 중' }}</strong>
+          <span class="eyebrow">{{
+            !state.buzz.enabled
+              ? '버저 잠금'
+              : firstClosed
+                ? '선착순 마감'
+                : state.buzz.winner
+                  ? 'FIRST BUZZ'
+                  : '버징 대기 중'
+          }}</span
+          ><strong>{{ state.buzz.winner?.nickname ?? '누가 가장 빠를까요?' }}</strong>
           <p>{{ state.buzz.acceptedCount }}명 참여 · {{ state.participants.length }}명 연결됨</p>
         </div>
         <p v-if="!isHost" class="winner-line" aria-live="polite">
-          {{ state.buzz.winner ? `🏆 1등: ${state.buzz.winner.nickname}` : '아직 우승자가 없어요' }}
+          {{ state.buzz.winner ? `1등 · ${state.buzz.winner.nickname}` : '아직 우승자가 없어요' }}
         </p>
         <ol v-if="state.buzz.ranking.length" class="ranking">
-          <li v-for="(entry, index) in state.buzz.ranking" :key="entry.participantId">
+          <li
+            v-for="(entry, index) in state.buzz.ranking"
+            :key="entry.participantId"
+            :class="{ 'my-ranking': entry.participantId === identity?.participantId }"
+          >
             <span class="rank-number">{{ index + 1 }}</span
-            ><span>{{ entry.nickname }}</span
+            ><span class="rank-name"
+              >{{ entry.nickname
+              }}<small v-if="entry.participantId === identity?.participantId" class="me-label"
+                >나</small
+              ></span
             ><b>{{ index === 0 ? 'FIRST' : `+${Math.round(entry.deltaMs)} ms` }}</b>
           </li>
         </ol>
         <p v-else class="empty">버저를 누르면 여기에 순위가 표시됩니다.</p>
+        <div v-if="isHost" class="button-row mode-switch" role="group" aria-label="버저 진행 방식">
+          <button
+            :disabled="!connected"
+            :aria-pressed="state.buzz.mode === 'first'"
+            @click="command('buzz:set-mode', { mode: 'first' })"
+          >
+            1명 선착순
+          </button>
+          <button
+            :disabled="!connected"
+            :aria-pressed="state.buzz.mode === 'all'"
+            @click="command('buzz:set-mode', { mode: 'all' })"
+          >
+            전체 순위 버징
+          </button>
+        </div>
+        <p class="muted">
+          {{
+            state.buzz.mode === 'first'
+              ? '첫 1명 접수 후 마감합니다.'
+              : '모두 한 번씩 누를 수 있습니다. 전체 순위를 기록합니다.'
+          }}
+        </p>
         <div v-if="isHost" class="button-row">
           <button class="primary" :disabled="!connected" @click="command('buzz:reset', {})">
             ↻ 새 라운드</button
@@ -445,24 +648,32 @@ async function permission(): Promise<void> {
             {{ state.buzz.enabled ? '버저 끄기' : '버저 켜기' }}
           </button>
         </div>
+        <div v-if="isHost" class="reset-row">
+          <span>결과와 라운드를 처음부터</span>
+          <button class="quiet" :disabled="!connected" @click="command('buzz:restart', {})">
+            완전 초기화
+          </button>
+        </div>
         <small class="muted"
           >호스트 서버에 도착한 순서입니다. 네트워크 지연의 영향을 받습니다.</small
         >
       </section>
-      <section v-if="isHost" class="panel ppt-panel">
+      <section v-if="canControlPpt" class="panel ppt-panel">
         <div class="section-heading">
           <h2>PowerPoint 리모컨</h2>
           <span class="tag">{{ ppt?.mock ? 'MOCK' : 'MAC' }}</span>
         </div>
-        <p class="status-line">
+        <p class="status-line" :class="{ ready: ppt?.ready }" role="status">
           {{
             !ppt
               ? '상태 확인 중…'
-              : !ppt.running
-                ? 'PowerPoint가 실행되지 않았습니다.'
-                : !ppt.accessibilityGranted
-                  ? '손쉬운 사용 권한이 필요합니다.'
-                  : 'PowerPoint 실행 중 · 제어 준비됨'
+              : ppt.probeFailed
+                ? 'PowerPoint 상태를 확인할 수 없습니다.'
+                : !ppt.running
+                  ? 'PowerPoint가 실행되지 않았습니다.'
+                  : !ppt.accessibilityGranted
+                    ? '손쉬운 사용 권한이 필요합니다.'
+                    : 'PowerPoint 실행 중 · 제어 준비됨'
           }}
         </p>
         <p v-if="ppt?.lastError" class="alert">{{ ppt.lastError.message }}</p>
@@ -481,7 +692,7 @@ async function permission(): Promise<void> {
           ‘다음 / 클릭’은 Space 키로 다음 애니메이션 또는 슬라이드를 진행합니다. 먼저 PowerPoint
           슬라이드 쇼를 열어 주세요.
         </p>
-        <label class="toggle"
+        <label v-if="isHost" class="toggle"
           ><input
             type="checkbox"
             :checked="state.settings.autoAdvanceOnWinner"
@@ -582,7 +793,7 @@ async function permission(): Promise<void> {
           <summary>연결 문제 해결</summary>
           <p>
             휴대폰과 Mac을 같은 Wi-Fi에 연결하세요. 게스트 Wi-Fi의 기기 격리, VPN, macOS 방화벽을
-            확인하세요. 주소가 여러 개면 Wi-Fi 주소를 선택하세요. 네트워크를 바꾼 경우 앱을 다시
+            확인하세요. 다른 네트워크에서는 인터넷 참여를 켜세요. 네트워크를 바꾼 경우 앱을 다시
             시작하세요.
           </p>
         </details>
@@ -594,23 +805,39 @@ async function permission(): Promise<void> {
         </div>
         <p v-if="!state.participants.length" class="empty">첫 참가자를 기다리고 있어요.</p>
         <ul>
-          <li v-for="participant in state.participants" :key="participant.id">
-            {{ participant.nickname }}
+          <li
+            v-for="participant in state.participants"
+            :key="participant.id"
+            :class="{ controlling: state.controllerId === participant.id }"
+          >
+            <span class="participant-avatar" aria-hidden="true">{{
+              participant.nickname.slice(-1)
+            }}</span>
+            <span class="participant-name"
+              >{{ participant.nickname
+              }}<small>{{
+                state.controllerId === participant.id ? 'PowerPoint 제어 중' : '참여 중'
+              }}</small></span
+            >
+            <button
+              :disabled="!connected"
+              :aria-label="`${participant.nickname} ${state.controllerId === participant.id ? '제어권 회수' : 'PPT 제어권 부여'}`"
+              @click="
+                command('ppt:assign', {
+                  participantId: state.controllerId === participant.id ? null : participant.id
+                })
+              "
+            >
+              {{ state.controllerId === participant.id ? '제어권 회수' : 'PPT 제어권 부여' }}
+            </button>
           </li>
         </ul>
       </section>
     </div>
-    <footer>
-      Buzz Chat PPT Remote · 같은 공간, 함께하는 발표<br /><a :href="sourceUrl"
-        >AGPL-3.0 · 이 버전 소스 다운로드</a
-      >
-      ·
-      <a
-        href="https://github.com/smilexizheng/mobile-pc-control-server"
-        target="_blank"
-        rel="noopener"
-        >Upstream: smilexizheng</a
-      >
-    </footer>
+    <details class="source-info">
+      <summary>오픈소스 정보</summary>
+      <a :href="sourceUrl">AGPL-3.0 · 이 버전 소스 다운로드</a>
+    </details>
+    <footer>아이들나라스쿼드</footer>
   </div>
 </template>

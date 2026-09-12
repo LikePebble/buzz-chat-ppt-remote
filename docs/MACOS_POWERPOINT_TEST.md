@@ -26,7 +26,7 @@ Create a disposable two-slide presentation. Put three objects on slide 1 and giv
 11. Confirm animation 3.
 12. Press again and confirm transition to slide 2.
 13. Test 이전 (previous animation/slide semantics are PowerPoint-controlled).
-14. Test 화면 검정; press again to restore.
+14. Test 화면 검정; press again to restore. Repeat with both ABC and Korean 2-set input sources, recording each result. The implementation sends physical B key code 11; this alone does not prove PowerPoint accepts it under every input source. Also test other keyboard layouts used at the venue.
 15. Test 슬라이드 쇼 종료.
 16. Test 처음부터 시작.
 17. Stop, select slide 2 in editing view, and test 현재부터 시작.

@@ -21,7 +21,7 @@ Fixed osascript scripts via execFile; detect running, check Accessibility, activ
 # Security Boundary
 Legacy server and IPC never imported. Default namespace rejects all clients. No legacy HTTP file endpoints. High entropy host and resume secrets never in public room state. Payload limits and per-identity rate limits.
 # Test Strategy
-Node test runner with tsx; unit tests, actual Socket.IO integration, 20/100-client two-round consistency tests, renderer and packaged Electron smoke tests. Real PowerPoint only in controlled context; otherwise read-only status.
+Node test runner with tsx; unit tests, actual Socket.IO integration, 20/100-client two-round consistency tests, and renderer state/watcher tests with mocked browser APIs. Visual renderer and packaged Electron smoke checks are manual. Real PowerPoint only in controlled context; otherwise read-only status.
 # Packaging Strategy
 electron-builder ad-hoc signed darwin-arm64 .app and zip; Electron 39 baseline macOS 12 retained. No Rosetta/native automation addons. Bundled license and corresponding source access.
 # Risks

@@ -1,4 +1,5 @@
 export const NAMESPACE = '/interaction'
+export const PUBLIC_TUNNEL_HOST = 'buzz-public.local'
 export const REACTIONS = ['👏', '❤️', '😂', '🔥', '👍'] as const
 export const PPT_COMMANDS = [
   'advance',
@@ -48,6 +49,8 @@ export interface BuzzEntry {
   deltaMs: number
 }
 export interface BuzzState {
+  displayRound: number
+  mode: 'first' | 'all'
   enabled: boolean
   round: number
   winner: BuzzEntry | null
@@ -65,6 +68,7 @@ export interface RoomSettings {
   autoAdvanceOnWinner: boolean
 }
 export interface RoomState {
+  controllerId: string | null
   id: string
   createdAt: number
   participants: Participant[]
@@ -73,6 +77,7 @@ export interface RoomState {
   settings: RoomSettings
 }
 export interface PowerPointStatus {
+  probeFailed?: boolean
   running: boolean
   accessibilityGranted: boolean
   ready: boolean
@@ -80,10 +85,16 @@ export interface PowerPointStatus {
   mock: boolean
 }
 export interface SystemStatus {
+  internet?: InternetStatus
   port: number
   addresses: string[]
   participantUrls: string[]
   platform: string
+}
+export interface InternetStatus {
+  state: 'off' | 'connecting' | 'ready' | 'error'
+  url?: string
+  message?: string
 }
 export interface JoinPayload {
   roomId: string
@@ -94,7 +105,11 @@ export interface JoinPayload {
 export interface ClientPayloads {
   'room:join': JoinPayload
   'host:join': { roomId: string; token: string }
+  'participant:rename': { nickname: string }
+  'ppt:assign': { participantId: string | null }
   'buzz:press': { roundId: number }
+  'buzz:restart': Record<string, never>
+  'buzz:set-mode': { mode: 'first' | 'all' }
   'buzz:reset': Record<string, never>
   'buzz:set-enabled': { enabled: boolean }
   'room:set-settings': RoomSettings
@@ -106,7 +121,11 @@ export interface ClientPayloads {
 export interface ClientResults {
   'room:join': { identity: Identity; state: RoomState; hasBuzzed: boolean }
   'host:join': { state: RoomState }
+  'participant:rename': { nickname: string }
+  'ppt:assign': { participantId: string | null }
   'buzz:press': BuzzState
+  'buzz:restart': BuzzState
+  'buzz:set-mode': BuzzState
   'buzz:reset': BuzzState
   'buzz:set-enabled': BuzzState
   'room:set-settings': RoomSettings
@@ -119,6 +138,8 @@ export type ClientEvents = {
   [K in keyof ClientPayloads]: (payload: ClientPayloads[K], ack: Ack<ClientResults[K]>) => void
 }
 export interface ServerEvents {
+  'ppt:controller': (participantId: string | null) => void
+  'room:settings': (settings: RoomSettings) => void
   'room:state': (state: RoomState) => void
   'presence:update': (participants: Participant[]) => void
   'buzz:state': (state: BuzzState) => void
@@ -135,6 +156,7 @@ export interface HostBootstrap {
   system: SystemStatus
 }
 export interface DesktopApi {
+  setInternetEnabled(enabled: boolean): Promise<InternetStatus>
   bootstrap(): Promise<HostBootstrap>
   requestAccessibility(): Promise<boolean>
   openAccessibilitySettings(): Promise<void>

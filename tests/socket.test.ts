@@ -3,6 +3,112 @@ import { test } from 'node:test'
 import { io } from 'socket.io-client'
 import { emit, fixture, ok, rejected } from './helpers'
 import type { ClientPayloads } from '../src/interaction/protocol'
+import { PUBLIC_TUNNEL_HOST } from '../src/interaction/protocol'
+
+test('public tunnel host requires token and can control PPT; only one participant URL is advertised', async () => {
+  const f = await fixture()
+  const external = io(f.base + '/interaction', {
+    transports: ['websocket'],
+    extraHeaders: { Host: PUBLIC_TUNNEL_HOST },
+    reconnection: false,
+    forceNew: true,
+    autoConnect: false
+  })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      external.once('connect', resolve)
+      external.once('connect_error', reject)
+      external.connect()
+    })
+    const room = f.server.activeRoom
+    rejected(
+      await emit(external, 'host:join', { roomId: room.id, token: 'invalid' }),
+      'UNAUTHORIZED'
+    )
+    rejected(await emit(external, 'ppt:command', { command: 'advance' }), 'UNAUTHORIZED')
+    ok(await emit(external, 'host:join', { roomId: room.id, token: room.hostToken }))
+    ok(await emit(external, 'ppt:command', { command: 'advance' }))
+    ok(await emit(external, 'buzz:set-mode', { mode: 'first' }))
+    assert.equal(room.buzz.mode, 'first')
+    ok(await emit(external, 'buzz:restart', {}))
+    assert.equal(room.buzz.displayRound, 1)
+    f.server.setInternetStatus({ state: 'ready', url: 'https://example.trycloudflare.com' })
+    assert.equal(
+      f.server.system.participantUrls[0],
+      `https://example.trycloudflare.com/r/${room.id}`
+    )
+    assert.equal(f.server.system.participantUrls.length, 1)
+    f.server.setInternetStatus({ state: 'off' })
+    assert.ok(f.server.system.participantUrls.length <= 1)
+    assert.ok(f.server.system.participantUrls.every((url) => url.startsWith('http://')))
+  } finally {
+    external.disconnect()
+    await f.close()
+  }
+})
+
+test('busy auto advance reports rejection, preserves the winner and leaves the active command locked', async () => {
+  const f = await fixture()
+  let release: (() => void) | undefined
+  try {
+    const participant = await f.connect()
+    const room = f.server.activeRoom
+    ok(await emit(participant, 'room:join', { roomId: room.id }))
+    ok(await emit(f.host, 'room:set-settings', { autoAdvanceOnWinner: true }))
+    let started!: () => void
+    const running = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    f.controller.previous = async () => {
+      f.controller.commands.push('previous')
+      await new Promise<void>((resolve) => {
+        release = resolve
+        started()
+      })
+    }
+    const pending = emit(f.host, 'ppt:command', { command: 'previous' })
+    await running
+    const failure = new Promise<string>((resolve) =>
+      f.host.once('app:error', (error) => resolve(error.code))
+    )
+    ok(await emit(participant, 'buzz:press', { roundId: 1 }))
+    assert.equal(await failure, 'RATE_LIMITED')
+    assert.ok(room.buzz.winner)
+    assert.equal(room.buzz.acceptedCount, 1)
+    rejected(await emit(f.host, 'ppt:command', { command: 'advance' }), 'RATE_LIMITED')
+    assert.deepEqual(f.controller.commands, ['previous'])
+    release!()
+    ok(await pending)
+    ok(await emit(f.host, 'ppt:command', { command: 'advance' }))
+    assert.deepEqual(f.controller.commands, ['previous', 'advance'])
+  } finally {
+    release?.()
+    await f.close()
+  }
+})
+
+test('settings updates synchronize hosts without resending participant room history', async () => {
+  const f = await fixture()
+  try {
+    const participant = await f.connect()
+    const secondHost = await f.connect()
+    const room = f.server.activeRoom
+    ok(await emit(participant, 'room:join', { roomId: room.id }))
+    ok(await emit(secondHost, 'host:join', { roomId: room.id, token: room.hostToken }))
+    let participantUpdates = 0
+    participant.on('room:state', () => participantUpdates++)
+    participant.on('room:settings', () => participantUpdates++)
+    const received = new Promise<boolean>((resolve) =>
+      secondHost.once('room:settings', (settings) => resolve(settings.autoAdvanceOnWinner))
+    )
+    ok(await emit(f.host, 'room:set-settings', { autoAdvanceOnWinner: true }))
+    assert.equal(await received, true)
+    ok(await emit(participant, 'chat:send', { text: 'flush participant transport' }))
+    assert.equal(participantUpdates, 0)
+  } finally {
+    await f.close()
+  }
+})
 
 test('real Socket.IO: join, winner broadcast, authorization, reset, chat, reaction, reconnect', async () => {
   const f = await fixture()
@@ -173,6 +279,64 @@ test('PPT routes commands; auto advance observes committed broadcast; failures p
     await failure
     assert.deepEqual(room.buzz.winner, winner)
     assert.equal(room.buzz.acceptedCount, 1)
+  } finally {
+    await f.close()
+  }
+})
+
+test('host grants one participant PPT-only authority, transfer/revoke/disconnect take effect on server', async () => {
+  const f = await fixture()
+  try {
+    const a = await f.connect()
+    const b = await f.connect()
+    const room = f.server.activeRoom
+    const ai = ok(await emit(a, 'room:join', { roomId: room.id, nickname: '첫번째' })).identity
+    const bi = ok(await emit(b, 'room:join', { roomId: room.id })).identity
+    rejected(await emit(a, 'ppt:assign', { participantId: ai.participantId }), 'UNAUTHORIZED')
+    rejected(await emit(a, 'ppt:command', { command: 'advance' }), 'UNAUTHORIZED')
+    rejected(await emit(f.host, 'ppt:assign', { participantId: 'missing' }), 'INVALID_PAYLOAD')
+    ok(await emit(f.host, 'ppt:assign', { participantId: ai.participantId }))
+    ok(await emit(a, 'ppt:command', { command: 'advance' }))
+    ok(await emit(a, 'ppt:refresh', {}))
+    rejected(await emit(a, 'buzz:reset', {}), 'UNAUTHORIZED')
+    ok(await emit(f.host, 'ppt:assign', { participantId: bi.participantId }))
+    rejected(await emit(a, 'ppt:command', { command: 'advance' }), 'UNAUTHORIZED')
+    ok(await emit(b, 'ppt:command', { command: 'previous' }))
+    ok(await emit(f.host, 'ppt:assign', { participantId: null }))
+    rejected(await emit(b, 'ppt:command', { command: 'previous' }), 'UNAUTHORIZED')
+    const renamed = ok(await emit(b, 'participant:rename', { nickname: '발표자' }))
+    assert.equal(renamed.nickname, '발표자')
+    assert.equal(room.members.get(ai.participantId)?.public.nickname, '첫번째')
+    ok(await emit(f.host, 'ppt:assign', { participantId: bi.participantId }))
+    const revoked = new Promise<void>((resolve) =>
+      f.host.once('ppt:controller', (id) => {
+        assert.equal(id, null)
+        resolve()
+      })
+    )
+    b.disconnect()
+    await revoked
+    assert.equal(room.controllerId, null)
+  } finally {
+    await f.close()
+  }
+})
+test('winner follows arrival order rather than participant or connection order', async () => {
+  const f = await fixture()
+  try {
+    const a = await f.connect()
+    const b = await f.connect()
+    const room = f.server.activeRoom
+    const ai = ok(await emit(a, 'room:join', { roomId: room.id })).identity
+    const bi = ok(await emit(b, 'room:join', { roomId: room.id })).identity
+    for (let i = 0; i < 6; i++) {
+      const first = i % 2 ? a : b
+      const second = i % 2 ? b : a
+      ok(await emit(first, 'buzz:press', { roundId: room.buzz.round }))
+      ok(await emit(second, 'buzz:press', { roundId: room.buzz.round }))
+      assert.equal(room.buzz.winner?.participantId, i % 2 ? ai.participantId : bi.participantId)
+      ok(await emit(f.host, 'buzz:reset', {}))
+    }
   } finally {
     await f.close()
   }

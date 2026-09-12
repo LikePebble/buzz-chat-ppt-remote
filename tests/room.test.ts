@@ -83,7 +83,7 @@ test('reaction and time-window rate limits recover after the interval', () => {
   limit.accept()
   assert.equal(secretMatches('é'.repeat(64), 'a'.repeat(64)), false)
 })
-test('chat history bounded at 50 and ranking at 10 while recording all accepted participants', () => {
+test('chat history bounded at 50 and ranking records all accepted participants', () => {
   const room = new Room('ABC234')
   for (let i = 0; i < 60; i++) {
     const user = room.join({ roomId: room.id }, String(i))
@@ -92,6 +92,46 @@ test('chat history bounded at 50 and ranking at 10 while recording all accepted 
   }
   assert.equal(room.chatHistory.length, 50)
   assert.equal(room.chatHistory[0].text, '10')
-  assert.equal(room.buzz.ranking.length, 10)
+  assert.equal(room.buzz.ranking.length, 60)
   assert.equal(room.buzz.acceptedCount, 60)
+})
+
+test('first mode closes after winner, all mode admits others and complete reset rejects stale requests', () => {
+  const { room, a, b } = setup()
+  room.buzz.mode = 'first'
+  room.press(a.participantId, 1)
+  assert.throws(() => room.press(b.participantId, 1), code('BUZZ_DISABLED'))
+  room.buzz.mode = 'all'
+  room.press(b.participantId, 1)
+  room.chat(a.participantId, 'keep chat')
+  room.reset()
+  room.buzz.enabled = false
+  room.reset(true)
+  assert.equal(room.buzz.displayRound, 1)
+  assert.equal(room.buzz.enabled, true)
+  assert.equal(room.buzz.acceptedCount, 0)
+  assert.equal(room.buzz.ranking.length, 0)
+  assert.equal(room.hasBuzzed(a.participantId), false)
+  assert.equal(room.participants().length, 2)
+  assert.equal(room.chatHistory.length, 1)
+  assert.throws(() => room.press(a.participantId, 1), code('STALE_ROUND'))
+  assert.equal(room.press(a.participantId, room.buzz.round), true)
+})
+
+test('nicknames allow ten Unicode characters, reject invalid names, retain identity and update ranking', () => {
+  const { room, a } = setup()
+  room.press(a.participantId, 1)
+  assert.equal(room.rename(a.participantId, '가나다라마바사아자차'), '가나다라마바사아자차')
+  assert.equal(room.buzz.winner?.nickname, '가나다라마바사아자차')
+  assert.throws(
+    () => room.rename(a.participantId, '가나다라마바사아자차카'),
+    code('INVALID_PAYLOAD')
+  )
+  assert.throws(() => room.rename(a.participantId, '   '), code('INVALID_PAYLOAD'))
+  assert.throws(() => room.rename(a.participantId, 'a\nb'), code('INVALID_PAYLOAD'))
+  assert.equal(room.rename(a.participantId, '😀'.repeat(10)), '😀'.repeat(10))
+  const resumed = room.join({ roomId: room.id, ...a }, 'again')
+  assert.equal(resumed.participantId, a.participantId)
+  assert.equal(resumed.nickname, '😀'.repeat(10))
+  assert.equal(room.hasBuzzed(a.participantId), true)
 })

@@ -27,8 +27,8 @@ async function main(): Promise<void> {
         results.forEach(ok)
         const buzz = f.server.activeRoom.buzz
         assert.equal(buzz.acceptedCount, count)
-        assert.equal(buzz.ranking.length, 10)
-        assert.equal(new Set(buzz.ranking.map((e) => e.participantId)).size, 10)
+        assert.equal(buzz.ranking.length, count)
+        assert.equal(new Set(buzz.ranking.map((e) => e.participantId)).size, count)
         assert.equal(new Set(results.map((r) => ok(r).winner?.participantId)).size, 1)
         assert.ok(buzz.winner)
         const duplicate = await emit(clients[0], 'buzz:press', { roundId: round })
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
         ok(await emit(f.host, 'ppt:refresh', {})) // Round-trip flush for host broadcasts.
         assert.equal(observedWinners.size, 1)
         console.info(
-          `PASS clients=${count} round=${round} accepted=${buzz.acceptedCount} winners=1 ranking=10 elapsed=${Math.round(performance.now() - start)}ms`
+          `PASS clients=${count} round=${round} accepted=${buzz.acceptedCount} winners=1 ranking=${buzz.ranking.length} elapsed=${Math.round(performance.now() - start)}ms`
         )
         ok(await emit(f.host, 'buzz:reset', {}))
         assert.equal(f.server.activeRoom.buzz.winner, null)

@@ -15,3 +15,5 @@ db
 
 # Product generated build and corresponding-source archive
 out/
+build/vendor/
+docs/reviews/

@@ -7,7 +7,7 @@ const execFileAsync = promisify(execFile)
 export const KEY_SCRIPTS: Record<PowerPointCommand, string> = {
   advance: 'key code 49',
   previous: 'key code 123',
-  blackout: 'keystroke "b"',
+  blackout: 'key code 11',
   stop: 'key code 53',
   startFromBeginning: 'key code 36 using {command down, shift down}',
   startFromCurrent: 'key code 36 using {command down}'
@@ -31,6 +31,7 @@ export const runAppleScript: ScriptRunner = async (script) => {
 }
 export class MacOSPowerPointController implements PowerPointController {
   private lastError: PowerPointStatus['lastError'] = null
+  private probeError: PowerPointStatus['lastError'] = null
   private busy = false
   constructor(
     private accessibility: () => boolean,
@@ -40,8 +41,9 @@ export class MacOSPowerPointController implements PowerPointController {
     let running = false
     try {
       running = (await this.run('application "Microsoft PowerPoint" is running')) === 'true'
+      this.probeError = null
     } catch {
-      this.lastError = {
+      this.probeError = {
         code: 'POWERPOINT_COMMAND_FAILED',
         message: 'PowerPoint 상태를 확인할 수 없습니다.'
       }
@@ -51,7 +53,8 @@ export class MacOSPowerPointController implements PowerPointController {
       running,
       accessibilityGranted,
       ready: running && accessibilityGranted,
-      lastError: this.lastError,
+      lastError: this.probeError ?? this.lastError,
+      probeFailed: this.probeError !== null,
       mock: false
     }
   }
