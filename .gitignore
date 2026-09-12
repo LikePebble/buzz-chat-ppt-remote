@@ -12,3 +12,6 @@ db
 .vscode
 
 
+
+# Product generated build and corresponding-source archive
+out/
