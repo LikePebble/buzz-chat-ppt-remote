@@ -23,6 +23,6 @@ Legacy server and IPC never imported. Default namespace rejects all clients. No 
 # Test Strategy
 Node test runner with tsx; unit tests, actual Socket.IO integration, 20/100-client two-round consistency tests, renderer and packaged Electron smoke tests. Real PowerPoint only in controlled context; otherwise read-only status.
 # Packaging Strategy
-electron-builder unsigned darwin-arm64 .app and zip; Electron 39 baseline macOS 12 retained. No Rosetta/native automation addons. Bundled license and corresponding source access.
+electron-builder ad-hoc signed darwin-arm64 .app and zip; Electron 39 baseline macOS 12 retained. No Rosetta/native automation addons. Bundled license and corresponding source access.
 # Risks
 macOS Accessibility/Automation consent, PowerPoint focus/Presenter View, firewall/LAN routing, HTTP on trusted LAN, unsigned distribution and second-machine acceptance need separate evidence.

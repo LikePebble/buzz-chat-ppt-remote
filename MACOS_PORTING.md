@@ -15,6 +15,8 @@ Electron systemPreferences.isTrustedAccessibilityClient(false) checks status; us
 # PowerPoint Control Strategy
 Fixed scripts, execFile argument array, running detection before activation, verify frontmost process, fixed Space/Left/B/Escape/Command+Shift+Return/Command+Return. Timeout and busy rejection bound execution; winner broadcast precedes asynchronous automation.
 # Packaging Risks
-Unsigned local arm64 artifact, no notarization. Keep Electron 39 supported macOS 12 baseline. Packaged permissions differ from Terminal/dev Electron. Same artifact intended for M1/M4; only current hardware can be verified here.
+Ad-hoc signed local arm64 artifact, no notarization. Keep Electron 39 supported macOS 12 baseline. Packaged permissions differ from Terminal/dev Electron. Same artifact intended for M1/M4; only current hardware can be verified here.
 # Decisions
 Preserve upstream source and AGPL notices, isolate runtime instead of porting unrelated PC automation. Keep Electron/Vue/electron-vite/Express/Socket.IO/QR stack. No database/cloud. See PLAN.md and README for active paths and validation.
+
+Local packaging verification found that skipping signing left an invalid resource seal. Ad-hoc signing fixes the seal without a Developer ID. Hardened runtime also requires the app-scoped `disable-library-validation` entitlement for the bundled Electron framework when no shared Team ID exists. This affects this local app only; no system security settings are changed. JIT and Apple Events entitlements are included; legacy DYLD environment-variable entitlement is not used.

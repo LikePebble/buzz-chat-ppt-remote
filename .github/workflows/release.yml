@@ -1,57 +1,29 @@
-name: Build Release
-
+name: Validate Apple Silicon MVP
 on:
-  push:
-    tags:
-      - v*.*.*
-
+  workflow_dispatch:
+  pull_request:
+    branches: [main, master]
+permissions:
+  contents: read
 jobs:
-  release:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [ windows-latest ]
-    #        os: [windows-latest,ubuntu-latest, macos-latest ]
-
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
     steps:
-      - name: Check out Git repository
-        uses: actions/checkout@v6
-
-      - name: Install Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: build-linux
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run build:linux
-
-      - name: build-mac
-        if: matrix.os == 'macos-latest'
-        run: npm run build:mac
-
-      - name: build-win
-        if: matrix.os == 'windows-latest'
-        run: npm run build:win
-
-      - name: release
-        uses: softprops/action-gh-release@v1
+          cache: npm
+      - name: Verify native Apple Silicon Node
+        run: node -e "if (process.arch !== 'arm64') process.exit(1)"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:load
+      - run: npm run build:mac:arm64
+      - uses: actions/upload-artifact@v4
         with:
-          draft: true
-          files: |
-            dist/*.exe
-            dist/*.zip
-            dist/*.dmg
-            dist/*.AppImage
-            dist/*.snap
-            dist/*.deb
-            dist/*.rpm
-            dist/*.tar.gz
-            dist/*.yml
-            dist/*.blockmap
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          name: buzz-chat-ppt-remote-arm64
+          path: dist/*.zip

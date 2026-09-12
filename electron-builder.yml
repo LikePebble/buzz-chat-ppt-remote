@@ -7,11 +7,14 @@ files:
   - package.json
   - LICENSE.txt
   - LICENSE_NOTES.md
+  - THIRD_PARTY_NOTICES.txt
 extraResources:
   - from: out/source.tar.gz
     to: source.tar.gz
 mac:
-  identity: null
+  identity: '-'
+  entitlements: build/entitlements.buzz.plist
+  entitlementsInherit: build/entitlements.buzz.plist
   category: public.app-category.productivity
   minimumSystemVersion: '12.0'
   notarize: false
