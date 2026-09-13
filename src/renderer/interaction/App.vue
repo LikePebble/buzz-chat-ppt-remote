@@ -27,6 +27,7 @@ const connected = ref(false)
 const joining = ref(true)
 const error = ref('')
 const notice = ref('')
+const noticeTarget = ref<'global' | 'ppt'>('global')
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 watch(notice, (value) => {
   if (noticeTimer) {
@@ -199,6 +200,7 @@ async function command<K extends keyof ClientPayloads>(
   payload: ClientPayloads[K]
 ): Promise<ClientResults[K] | null> {
   notice.value = ''
+  noticeTarget.value = 'global'
   if (!socket?.connected) {
     error.value = '서버에 연결되지 않았습니다.'
     return null
@@ -442,6 +444,7 @@ async function pptCommand(action: PowerPointCommand): Promise<void> {
   const result = await command('ppt:command', { command: action })
   if (result) {
     ppt.value = result
+    noticeTarget.value = 'ppt'
     notice.value = `${pptLabels[action]} 명령 전송 완료`
   }
   pptBusy.value = false
@@ -533,7 +536,13 @@ async function toggleInternet(): Promise<void> {
       <span>{{ error }}</span
       ><button aria-label="오류 메시지 닫기" @click="error = ''">×</button>
     </div>
-    <p v-if="notice" class="notice" role="status">{{ notice }}</p>
+    <p
+      v-if="notice && (isHost || (noticeTarget !== 'ppt' && activeTab !== 'ppt'))"
+      class="notice"
+      role="status"
+    >
+      {{ notice }}
+    </p>
     <p v-if="!state && !error" class="empty">방에 연결하고 있습니다…</p>
 
     <div v-if="state" :class="isHost ? 'host-grid' : 'participant-stack'">
@@ -753,15 +762,17 @@ async function toggleInternet(): Promise<void> {
         <p v-if="!isHost" class="controller-note">호스트가 나에게 리모컨 제어권을 주었어요.</p>
         <p class="status-line" :class="{ ready: ppt?.ready }" role="status">
           {{
-            !ppt
-              ? '상태 확인 중…'
-              : ppt.probeFailed
-                ? 'PowerPoint 상태를 확인할 수 없습니다.'
-                : !ppt.running
-                  ? 'PowerPoint가 실행되지 않았습니다.'
-                  : !ppt.accessibilityGranted
-                    ? '손쉬운 사용 권한이 필요합니다.'
-                    : 'PowerPoint 실행 중 · 제어 준비됨'
+            !isHost && noticeTarget === 'ppt' && notice && ppt?.ready
+              ? notice
+              : !ppt
+                ? '상태 확인 중…'
+                : ppt.probeFailed
+                  ? 'PowerPoint 상태를 확인할 수 없습니다.'
+                  : !ppt.running
+                    ? 'PowerPoint가 실행되지 않았습니다.'
+                    : !ppt.accessibilityGranted
+                      ? '손쉬운 사용 권한이 필요합니다.'
+                      : 'PowerPoint 실행 중 · 제어 준비됨'
           }}
         </p>
         <p v-if="ppt?.lastError" class="alert">{{ ppt.lastError.message }}</p>
