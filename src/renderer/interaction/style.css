@@ -878,7 +878,7 @@ input[aria-invalid='true'] {
   gap: 8px;
   margin-bottom: 16px;
 }
-.participant-nav a {
+.participant-nav button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -892,7 +892,7 @@ input[aria-invalid='true'] {
   font-weight: 650;
   text-decoration: none;
 }
-.participant-nav a:active {
+.participant-nav button:active {
   background: var(--accent);
 }
 .participant-stack {
@@ -956,4 +956,38 @@ input[aria-invalid='true'] {
   .participant-stack .ppt-controls {
     grid-template-columns: 1fr;
   }
+}
+
+.host-winner.has-winner {
+  background: var(--accent);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 2px #b4c73e;
+}
+.host-winner.has-winner .eyebrow,
+.host-winner.has-winner p {
+  color: var(--brand);
+}
+.participant-gnb {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  background: var(--canvas);
+  box-shadow: 0 1px 0 var(--line);
+}
+.participant-shell {
+  padding-top: 0;
+}
+.participant-gnb .participant-nav {
+  margin-bottom: 0;
+}
+.participant-nav button[aria-selected='true'] {
+  background: var(--brand);
+  color: var(--surface);
+  border-color: var(--brand);
+}
+.participant-stack [role='tabpanel'] {
+  outline-offset: 3px;
 }

@@ -45,6 +45,30 @@ watch(error, (value) => {
 })
 const hasBuzzed = ref(false)
 const pressing = ref(false)
+type ParticipantTab = 'buzz' | 'chat' | 'ppt'
+const activeTab = ref<ParticipantTab>('buzz')
+const participantTabs = computed(() => [
+  { id: 'buzz' as const, label: '버저' },
+  { id: 'chat' as const, label: '채팅' },
+  ...(canControlPpt.value ? [{ id: 'ppt' as const, label: '리모컨' }] : [])
+])
+function tabKeydown(event: KeyboardEvent, index: number): void {
+  const tabs = participantTabs.value
+  const next =
+    event.key === 'ArrowRight'
+      ? (index + 1) % tabs.length
+      : event.key === 'ArrowLeft'
+        ? (index + tabs.length - 1) % tabs.length
+        : event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? tabs.length - 1
+            : -1
+  if (next < 0) return
+  event.preventDefault()
+  activeTab.value = tabs[next].id
+  document.getElementById(`tab-${tabs[next].id}`)?.focus()
+}
 const chat = ref('')
 const nicknameDraft = ref('')
 const nicknameSaving = ref(false)
@@ -125,6 +149,18 @@ const buzzHint = computed(() =>
             : '아직 순위에 참여할 수 있어요'
           : '정답을 알면 바로 누르세요'
 )
+watch(canControlPpt, async (allowed) => {
+  if (!isHost && !allowed && activeTab.value === 'ppt') {
+    activeTab.value = 'buzz'
+    await nextTick()
+    document.getElementById('tab-buzz')?.focus()
+  }
+})
+watch(activeTab, async (tab) => {
+  await nextTick()
+  window.scrollTo({ top: 0, behavior: 'instant' })
+  if (tab === 'chat') chatElement.value?.scrollTo({ top: chatElement.value.scrollHeight })
+})
 const firstClosed = computed(() => state.value?.buzz.mode === 'first' && !!state.value.buzz.winner)
 const canBuzz = computed(
   () =>
@@ -453,42 +489,55 @@ async function toggleInternet(): Promise<void> {
 
 <template>
   <div class="app-shell" :class="{ 'host-shell': isHost, 'participant-shell': !isHost }">
-    <header class="masthead">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" fill="none">
-            <path d="M8 13a8 8 0 0 1 16 0" />
-            <path d="M5 13a11 11 0 0 1 22 0" />
-            <path d="M7 22h18M10 19a6 6 0 0 1 12 0v3H10z" />
-          </svg>
-        </span>
-        <div>
-          <h1>
-            Buzzing<span class="brand-role">{{ isHost ? 'HOST' : 'LIVE' }}</span>
-          </h1>
-          <p class="brand-subtitle">
-            {{ isHost ? '모두의 반응이 모이는 순간' : '함께 누르고, 이야기해요' }}
-          </p>
+    <div :class="{ 'participant-gnb': !isHost }">
+      <header class="masthead">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M8 13a8 8 0 0 1 16 0" />
+              <path d="M5 13a11 11 0 0 1 22 0" />
+              <path d="M7 22h18M10 19a6 6 0 0 1 12 0v3H10z" />
+            </svg>
+          </span>
+          <div>
+            <h1>
+              Buzzing<span class="brand-role">{{ isHost ? 'HOST' : 'LIVE' }}</span>
+            </h1>
+            <p class="brand-subtitle">
+              {{ isHost ? '모두의 반응이 모이는 순간' : '함께 누르고, 이야기해요' }}
+            </p>
+          </div>
         </div>
-      </div>
-      <div class="connection" :class="{ online: connected }">
-        <span aria-hidden="true">●</span> {{ connectionText
-        }}<small>ROOM {{ roomId || '—' }}</small>
-      </div>
-    </header>
+        <div class="connection" :class="{ online: connected }">
+          <span aria-hidden="true">●</span> {{ connectionText
+          }}<small>ROOM {{ roomId || '—' }}</small>
+        </div>
+      </header>
+      <nav v-if="state && !isHost" class="participant-nav" role="tablist" aria-label="참가 화면">
+        <button
+          v-for="(tab, index) in participantTabs"
+          :id="`tab-${tab.id}`"
+          :key="tab.id"
+          role="tab"
+          :aria-selected="activeTab === tab.id"
+          :aria-controls="`${tab.id}-section`"
+          :tabindex="activeTab === tab.id ? 0 : -1"
+          @click="activeTab = tab.id"
+          @keydown="tabKeydown($event, index)"
+        >
+          {{ tab.label }}
+        </button>
+      </nav>
+    </div>
     <div v-if="error" class="alert" role="alert">
       <span>{{ error }}</span
       ><button aria-label="오류 메시지 닫기" @click="error = ''">×</button>
     </div>
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="!state && !error" class="empty">방에 연결하고 있습니다…</p>
-    <nav v-if="state && !isHost" class="participant-nav" aria-label="참가 화면 빠른 이동">
-      <a :href="`/r/${roomId}#buzz-section`">버저</a>
-      <a :href="`/r/${roomId}#chat-section`">채팅</a>
-      <a v-if="canControlPpt" :href="`/r/${roomId}#ppt-section`">리모컨</a>
-    </nav>
+
     <div v-if="state" :class="isHost ? 'host-grid' : 'participant-stack'">
-      <section v-if="!isHost" class="panel nickname-panel">
+      <section v-if="!isHost" v-show="activeTab === 'buzz'" class="panel nickname-panel">
         <details ref="nicknameDetails">
           <summary class="nickname-summary">
             <span
@@ -578,7 +627,10 @@ async function toggleInternet(): Promise<void> {
         >
       </section>
       <section
+        v-show="isHost || activeTab === 'buzz'"
         id="buzz-section"
+        :role="isHost ? undefined : 'tabpanel'"
+        :aria-labelledby="isHost ? undefined : 'tab-buzz'"
         tabindex="-1"
         class="panel buzz-panel"
         :class="{ winner: isWinner }"
@@ -599,15 +651,17 @@ async function toggleInternet(): Promise<void> {
             ><small>{{ buzzHint }}</small>
           </button></template
         >
-        <div v-else class="host-winner">
+        <div v-else class="host-winner" :class="{ 'has-winner': !!state.buzz.winner }">
           <span class="eyebrow">{{
-            !state.buzz.enabled
-              ? '버저 잠금'
-              : firstClosed
-                ? '선착순 마감'
-                : state.buzz.winner
-                  ? 'FIRST BUZZ'
-                  : '버징 대기 중'
+            state.buzz.winner
+              ? '선착순 우승자'
+              : !state.buzz.enabled
+                ? '버저 잠금'
+                : firstClosed
+                  ? '선착순 마감'
+                  : state.buzz.winner
+                    ? 'FIRST BUZZ'
+                    : '버징 대기 중'
           }}</span
           ><strong>{{ state.buzz.winner?.nickname ?? '누가 가장 빠를까요?' }}</strong>
           <p>{{ state.buzz.acceptedCount }}명 참여 · {{ state.participants.length }}명 연결됨</p>
@@ -683,7 +737,15 @@ async function toggleInternet(): Promise<void> {
           >호스트 서버에 도착한 순서입니다. 네트워크 지연의 영향을 받습니다.</small
         >
       </section>
-      <section v-if="canControlPpt" id="ppt-section" tabindex="-1" class="panel ppt-panel">
+      <section
+        v-if="canControlPpt"
+        v-show="isHost || activeTab === 'ppt'"
+        id="ppt-section"
+        :role="isHost ? undefined : 'tabpanel'"
+        :aria-labelledby="isHost ? undefined : 'tab-ppt'"
+        tabindex="-1"
+        class="panel ppt-panel"
+      >
         <div class="section-heading">
           <h2>PowerPoint 리모컨</h2>
           <span class="tag">{{ ppt?.mock ? 'MOCK' : 'MAC' }}</span>
@@ -735,7 +797,14 @@ async function toggleInternet(): Promise<void> {
           ></label
         >
       </section>
-      <section id="chat-section" tabindex="-1" class="panel chat-panel">
+      <section
+        v-show="isHost || activeTab === 'chat'"
+        id="chat-section"
+        :role="isHost ? undefined : 'tabpanel'"
+        :aria-labelledby="isHost ? undefined : 'tab-chat'"
+        tabindex="-1"
+        class="panel chat-panel"
+      >
         <div class="section-heading">
           <h2>라이브 채팅</h2>
           <span class="tag">{{ state.participants.length }}명</span>
