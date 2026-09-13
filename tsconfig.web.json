@@ -1,24 +1,5 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
-  "include": [
-    "src/renderer/src/env.d.ts",
-    "src/renderer/src/**/*",
-    "src/renderer/src/**/*.vue",
-    "src/renderer/mobile/env.d.ts",
-    "src/renderer/mobile/**/*",
-    "src/renderer/mobile/**/*.vue",
-    "src/preload/*.d.ts"
-  ],
-  "compilerOptions": {
-    "composite": true,
-    "baseUrl": ".",
-    "paths": {
-      "@renderer/*": [
-        "src/renderer/src/*"
-      ],
-      "@mobile/*": [
-        "src/renderer/mobile/*"
-      ]
-    }
-  }
+  "include": ["src/renderer/interaction/**/*.ts", "src/renderer/interaction/**/*.vue", "src/interaction/protocol.ts"],
+  "compilerOptions": { "strict": true, "noUnusedLocals": true }
 }

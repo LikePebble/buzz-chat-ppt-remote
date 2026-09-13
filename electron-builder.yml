@@ -1,74 +1,39 @@
-appId: io.github.smilexizheng
-productName: 本地助手CSE
+appId: io.github.likepebble.buzz-chat-ppt-remote
+productName: Buzzing
 directories:
   buildResources: build
-electronLanguages:
-  - zh-CN
-  - en-US
 files:
-  - "out/**"
-  - "package.json"
-  - "resources/**"
-  - "node_modules/**"
-  - '!**/*.{map,ts,tsx,jsx,less,scss,sass,css.d.ts,d.cts,d.mts,md,markdown,yaml,yml}'
-  - '!**/*{LICENSE,license,license.txt,LICENSE.txt,LICENSE-MIT.txt,*.LICENSE.txt,NOTICE.txt,README,README.md,CHANGELOG.md}'
-  - "!**/{.vscode,.yarn,.yarn-lock,.github,.cursorrules,.prettierrc,.prettierrc.json}"
-  - '!**/{test,tests,__tests__,coverage}/**'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  - '!**/{*.map,*.log,*.d.ts,*.LICENSE,*license,*.README,*example.js,example*,examples/*}'
-
-# to look app.asar  npx asar extract app.asar ./unpacked
-asarUnpack:
-  - resources/**
-# 将models 资源复制到外部
-#extraResources:
-#  - from: "models"
-#    to: "models"
-win:
-  executableName: 本地助手CSE
-#  requestedExecutionLevel: requireAdministrator
-nsis:
-  #  allowElevation: false
-  oneClick: false
-  allowToChangeInstallationDirectory: true
-  artifactName: ${productName}-${version}-${arch}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  - out/**
+  - package.json
+  - LICENSE.txt
+  - LICENSE_NOTES.md
+  - THIRD_PARTY_NOTICES.txt
+extraResources:
+  - from: src/renderer/interaction/fonts/OFL.txt
+    to: Pretendard-OFL.txt
+  - from: build/buzz-icon.png
+    to: buzz-icon.png
+  - from: build/vendor/cloudflared
+    to: cloudflared
+  - from: docs/CLOUDFLARED_LICENSE.txt
+    to: CLOUDFLARED_LICENSE.txt
+  - from: out/source.tar.gz
+    to: source.tar.gz
 mac:
-  entitlementsInherit: build/entitlements.mac.plist
-  artifactName: ${productName}-${version}-${arch}.${ext}
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+  icon: build/buzz-icon.icns
+  identity: '-'
+  entitlements: build/entitlements.buzz.plist
+  entitlementsInherit: build/entitlements.buzz.plist
+  category: public.app-category.productivity
+  minimumSystemVersion: '12.0'
   notarize: false
+  binaries:
+    - Contents/Resources/cloudflared
+  extendInfo:
+    NSAppleEventsUsageDescription: Control PowerPoint presentations using fixed keyboard commands.
+    NSLocalNetworkUsageDescription: Allow audience phones on the same Wi-Fi to join your presentation room.
   target:
-    - target: dmg
     - target: zip
-linux:
-  artifactName: ${productName}-${version}-${arch}.${ext}
-  target:
-    - target: AppImage
-    - target: deb
-    - target: rpm
-  maintainer: electronjs.org
-  category: Utility
+      arch: [arm64]
+  artifactName: Buzzing-${version}-${arch}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: http://127.0.0.1:8022/cse-update
-electronDownload:
-  mirror: https://npmmirror.com/mirrors/electron/
-releaseInfo:
-  releaseNotes: |
-    v2更新
-    ......
-#    https://www.electron.build/configuration#releaseinfo null | string
-#    zh-CN: |
-#      v2更新
-#    en: |
-#      update v2
-#
-#
