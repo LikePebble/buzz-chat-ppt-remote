@@ -88,6 +88,12 @@ const pptLabels: Record<PowerPointCommand, string> = {
   startFromBeginning: '처음부터 시작',
   startFromCurrent: '현재부터 시작'
 }
+const myRank = computed(
+  () =>
+    (state.value?.buzz.ranking.findIndex(
+      (entry) => entry.participantId === identity.value?.participantId
+    ) ?? -1) + 1
+)
 const isWinner = computed(
   () => !!identity.value && state.value?.buzz.winner?.participantId === identity.value.participantId
 )
@@ -446,7 +452,7 @@ async function toggleInternet(): Promise<void> {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'host-shell': isHost }">
+  <div class="app-shell" :class="{ 'host-shell': isHost, 'participant-shell': !isHost }">
     <header class="masthead">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
@@ -476,6 +482,11 @@ async function toggleInternet(): Promise<void> {
     </div>
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="!state && !error" class="empty">방에 연결하고 있습니다…</p>
+    <nav v-if="state && !isHost" class="participant-nav" aria-label="참가 화면 빠른 이동">
+      <a :href="`/r/${roomId}#buzz-section`">버저</a>
+      <a :href="`/r/${roomId}#chat-section`">채팅</a>
+      <a v-if="canControlPpt" :href="`/r/${roomId}#ppt-section`">리모컨</a>
+    </nav>
     <div v-if="state" :class="isHost ? 'host-grid' : 'participant-stack'">
       <section v-if="!isHost" class="panel nickname-panel">
         <details ref="nicknameDetails">
@@ -566,7 +577,12 @@ async function toggleInternet(): Promise<void> {
           수 있습니다.</small
         >
       </section>
-      <section class="panel buzz-panel" :class="{ winner: isWinner }">
+      <section
+        id="buzz-section"
+        tabindex="-1"
+        class="panel buzz-panel"
+        :class="{ winner: isWinner }"
+      >
         <div class="section-heading">
           <h2>{{ isHost ? '버저 진행' : '누가 가장 빠를까요?' }}</h2>
           <span class="tag">ROUND {{ state.buzz.displayRound ?? state.buzz.round }}</span>
@@ -596,6 +612,15 @@ async function toggleInternet(): Promise<void> {
           ><strong>{{ state.buzz.winner?.nickname ?? '누가 가장 빠를까요?' }}</strong>
           <p>{{ state.buzz.acceptedCount }}명 참여 · {{ state.participants.length }}명 연결됨</p>
         </div>
+        <p v-if="!isHost" class="personal-result" role="status">
+          {{
+            myRank
+              ? `내 순위 ${myRank}등 · 참여 완료`
+              : state.buzz.mode === 'first'
+                ? '가장 먼저 누른 1명만 성공해요'
+                : '모두 한 번씩 참여할 수 있어요'
+          }}
+        </p>
         <p v-if="!isHost" class="winner-line" aria-live="polite">
           {{ state.buzz.winner ? `1등 · ${state.buzz.winner.nickname}` : '아직 우승자가 없어요' }}
         </p>
@@ -658,11 +683,12 @@ async function toggleInternet(): Promise<void> {
           >호스트 서버에 도착한 순서입니다. 네트워크 지연의 영향을 받습니다.</small
         >
       </section>
-      <section v-if="canControlPpt" class="panel ppt-panel">
+      <section v-if="canControlPpt" id="ppt-section" tabindex="-1" class="panel ppt-panel">
         <div class="section-heading">
           <h2>PowerPoint 리모컨</h2>
           <span class="tag">{{ ppt?.mock ? 'MOCK' : 'MAC' }}</span>
         </div>
+        <p v-if="!isHost" class="controller-note">호스트가 나에게 리모컨 제어권을 주었어요.</p>
         <p class="status-line" :class="{ ready: ppt?.ready }" role="status">
           {{
             !ppt
@@ -709,7 +735,7 @@ async function toggleInternet(): Promise<void> {
           ></label
         >
       </section>
-      <section class="panel chat-panel">
+      <section id="chat-section" tabindex="-1" class="panel chat-panel">
         <div class="section-heading">
           <h2>라이브 채팅</h2>
           <span class="tag">{{ state.participants.length }}명</span>
@@ -749,13 +775,17 @@ async function toggleInternet(): Promise<void> {
           ><input
             id="message"
             v-model="chat"
+            enterkeyhint="send"
+            aria-describedby="message-help"
             maxlength="300"
             placeholder="메시지를 입력하세요"
             autocomplete="off"
             :disabled="!connected"
           /><button class="primary" :disabled="!connected || !chat.trim() || sending">전송</button>
         </form>
-        <small v-if="!isHost" class="muted">{{ chat.length }}/300 · 10초에 최대 5개</small>
+        <small v-if="!isHost" id="message-help" class="muted"
+          >{{ chat.length }}/300 · 10초에 최대 5개</small
+        >
       </section>
       <section v-if="isHost" class="panel system-panel">
         <div class="section-heading">
